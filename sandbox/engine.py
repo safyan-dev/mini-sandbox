@@ -38,6 +38,14 @@ def default_socket() -> str:
     return str(candidates[-1])
 
 
+def message(raw: bytes) -> str:
+    """Extract the daemon's error message from a response body."""
+    try:
+        return json.loads(raw).get("message", raw.decode("utf-8", "replace"))
+    except (ValueError, AttributeError):
+        return raw.decode("utf-8", "replace").strip() or "no message"
+
+
 class _UnixHTTPConnection(http.client.HTTPConnection):
     """http.client connection that speaks HTTP over an AF_UNIX socket."""
 
@@ -122,17 +130,10 @@ class Client:
         headers = {"Content-Type": "application/json"} if body else {}
         status, raw = self.request(method, path, body, headers, timeout)
         if status >= 400:
-            raise EngineError("%s %s -> %d: %s" % (method, path, status, _message(raw)))
+            raise EngineError("%s %s -> %d: %s" % (method, path, status, message(raw)))
         if not raw:
             return {}
         return json.loads(raw)
 
     def version(self) -> dict:
         return self.json("GET", "/version")
-
-
-def _message(raw: bytes) -> str:
-    try:
-        return json.loads(raw).get("message", raw.decode("utf-8", "replace"))
-    except (ValueError, AttributeError):
-        return raw.decode("utf-8", "replace").strip() or "no message"

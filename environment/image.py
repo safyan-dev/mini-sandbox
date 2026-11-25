@@ -1,4 +1,4 @@
-"""Stage 2 - build and verify the sandbox image, over the Engine API.
+"""Build and verify the sandbox image, over the Engine API.
 
 The image is the template every container is cloned from, so it is the one
 place where "what is available to untrusted code" is decided. This module both
@@ -13,7 +13,7 @@ import json
 import tarfile
 import urllib.parse
 
-from . import config, engine
+from sandbox import config, engine
 
 # Checks run *inside* the image, as the default user. Emits key=value lines.
 _VERIFY = r"""
@@ -34,7 +34,7 @@ def _image_path(name: str) -> str:
 
 
 def build(client: engine.Client, no_cache: bool = False) -> str:
-    """Build the sandbox image from docker/Dockerfile. Returns the image id."""
+    """Build the sandbox image from environment/Dockerfile. Returns the image id."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
         archive.add(str(config.DOCKERFILE_DIR / "Dockerfile"), arcname="Dockerfile")
@@ -46,7 +46,10 @@ def build(client: engine.Client, no_cache: bool = False) -> str:
     path = "/build?" + urllib.parse.urlencode(query)
 
     status, raw = client.request(
-        "POST", path, body=buffer.read(), headers={"Content-Type": "application/x-tar"},
+        "POST",
+        path,
+        body=buffer.read(),
+        headers={"Content-Type": "application/x-tar"},
         timeout=900,
     )
     if status >= 400:

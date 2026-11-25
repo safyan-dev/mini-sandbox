@@ -1,4 +1,11 @@
-"""Command-line entry point for the MiniSandbox controller."""
+"""MiniSandbox command line.
+
+    python3 cli.py doctor            verify macOS -> Linux VM -> kernel
+    python3 cli.py build             build and verify the sandbox image
+    python3 cli.py verify            re-check an existing image
+    python3 cli.py run FILE          execute a program in a sandbox
+    python3 cli.py check             run the security and execution tests
+"""
 
 from __future__ import annotations
 
@@ -6,13 +13,16 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import config, engine, environment, filesystem, image, sandbox
+from environment import doctor, image
+from sandbox import config, engine
+from sandbox.controller import Sandbox
+from tests.__main__ import main as run_tests
 
 
 def _print_checks(checks) -> int:
     failed = 0
     for name, ok, detail in checks:
-        print("  [%s] %-22s %s" % ("PASS" if ok else "FAIL", name, detail))
+        print("  [%s] %-30s %s" % ("PASS" if ok else "FAIL", name, detail))
         if not ok:
             failed += 1
     return failed
@@ -35,11 +45,10 @@ def _build(args) -> int:
 
     print("\nVerifying image contents")
     failed = _print_checks(image.verify(client))
-
     if failed:
         print("\n%d check(s) failed" % failed)
         return 1
-    print("\nImage ready: minimal Ubuntu + Python 3, runs as unprivileged user.")
+    print("\nImage ready.")
     return 0
 
 
@@ -51,16 +60,6 @@ def _verify(_args) -> int:
         print("\n%d check(s) failed" % failed)
         return 1
     print("\nImage verified.")
-    return 0
-
-
-def _filesystem(_args) -> int:
-    print("Verifying filesystem isolation\n")
-    failed = _print_checks(filesystem.verify())
-    if failed:
-        print("\n%d check(s) failed" % failed)
-        return 1
-    print("\nFilesystem isolation verified.")
     return 0
 
 
@@ -76,7 +75,7 @@ def _run(args) -> int:
     print("Program: %s (%d bytes)" % (path, len(code)))
     print("Lifecycle: create -> configure -> execute -> monitor -> destroy\n")
 
-    box = sandbox.Sandbox()
+    box = Sandbox(program_args=args.args)
     try:
         result = box.run(code, timeout=args.timeout)
     except engine.EngineError as exc:
@@ -92,9 +91,16 @@ def _run(args) -> int:
         if not result.stderr.endswith("\n"):
             sys.stderr.write("\n")
 
+    if result.timed_out:
+        state = "timeout - killed by controller"
+    elif result.oom_killed:
+        state = "OOM - killed by kernel"
+    else:
+        state = "exited"
+
     print(
-        "\nexit %d  |  %.2fs  |  container %s destroyed"
-        % (result.exit_code, result.duration, result.container_id[:12])
+        "\nexit %d  |  %.2fs  |  %s  |  container %s destroyed"
+        % (result.exit_code, result.duration, state, result.container_id[:12])
     )
     return result.exit_code
 
@@ -106,39 +112,44 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    doctor = sub.add_parser(
-        "doctor", help="verify the macOS -> Docker Linux VM -> kernel chain"
-    )
-    doctor.add_argument("-v", "--verbose", action="store_true")
+    sub.add_parser("doctor", help="verify macOS -> Docker Linux VM -> kernel")
 
     build = sub.add_parser("build", help="build and verify the sandbox image")
     build.add_argument("--no-cache", action="store_true")
 
     sub.add_parser("verify", help="re-check an existing sandbox image")
 
-    sub.add_parser(
-        "check-filesystem",
-        help="verify filesystem isolation inside a real sandbox",
-    )
+    sub.add_parser("check", help="run the security and execution tests")
 
     run = sub.add_parser("run", help="execute a Python file in a sandbox")
     run.add_argument("file", help="path to the .py program")
-    run.add_argument("--timeout", type=float, default=60.0)
+    run.add_argument("--timeout", type=float, default=config.DEFAULT_TIMEOUT)
 
     return parser
 
 
 def main(argv: list | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+
+    # Everything after a literal "--" goes to the sandboxed program, not to
+    # argparse. Without the split, argparse would try to parse the program's
+    # own flags as sandbox flags.
+    program_args = []
+    if "--" in raw:
+        split = raw.index("--")
+        raw, program_args = raw[:split], raw[split + 1:]
+
+    args = build_parser().parse_args(raw)
+    args.args = program_args
 
     if args.command == "doctor":
-        return environment.doctor(verbose=args.verbose)
+        return doctor.run()
     if args.command == "build":
         return _build(args)
     if args.command == "verify":
         return _verify(args)
-    if args.command == "check-filesystem":
-        return _filesystem(args)
+    if args.command == "check":
+        return run_tests([])
     if args.command == "run":
         return _run(args)
 

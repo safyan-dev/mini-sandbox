@@ -1,22 +1,20 @@
-"""Stage 1 - environment verification, over the Engine API.
+"""Environment verification.
 
-The point of this module is not to run untrusted code. It exists to prove the
-chain we are about to build on actually works:
+Confirms the chain every restriction depends on actually works:
 
     macOS host  ->  Docker Desktop Linux VM  ->  Linux kernel features
 
-If any link is broken then every later stage (isolation, limits, seccomp) is
-built on sand. `doctor()` checks the chain top to bottom and reports each link.
+If any link is broken then filesystem isolation, capabilities, seccomp and
+cgroup limits are all built on sand. This checks the chain top to bottom.
 """
 
 from __future__ import annotations
 
-import json
 import platform
 import sys
 import urllib.parse
 
-from . import config, engine
+from sandbox import config, engine
 
 # Runs *inside* the container. Emits `key=value` lines the controller parses.
 # It uses only coreutils so it works on a bare ubuntu image with no installs.
@@ -47,17 +45,17 @@ class Check:
 def _host_checks() -> list:
     py = "%d.%d.%d" % sys.version_info[:3]
     return [
-        Check("python", sys.version_info >= (3, 8), "Python %s (%s)" % (py, sys.executable)),
+        Check(
+            "python",
+            sys.version_info >= (3, 8),
+            "Python %s (%s)" % (py, sys.executable),
+        ),
         Check(
             "host",
             platform.system() == "Darwin",
             "%s %s %s" % (platform.system(), platform.release(), platform.machine()),
         ),
-        Check(
-            "docker socket",
-            True,
-            engine.default_socket(),
-        ),
+        Check("docker socket", True, engine.default_socket()),
     ]
 
 
@@ -71,7 +69,11 @@ def _engine_checks(client: engine.Client) -> tuple:
     cpu = int(info.get("NCPU") or 0)
     mem = int(info.get("MemTotal") or 0) / 1024 ** 3
     checks = [
-        Check("docker daemon", True, "engine %s, API ready" % info.get("ServerVersion", "?")),
+        Check(
+            "docker daemon",
+            True,
+            "engine %s, API ready" % info.get("ServerVersion", "?"),
+        ),
         Check(
             "linux vm",
             info.get("OSType") == "linux",
@@ -97,7 +99,8 @@ def _probe_checks(client: engine.Client) -> list:
     except engine.EngineError:
         status, raw = client.request(
             "POST",
-            "/images/create?fromImage=%s" % urllib.parse.quote(config.BASE_IMAGE, safe=""),
+            "/images/create?fromImage=%s"
+            % urllib.parse.quote(config.BASE_IMAGE, safe=""),
             timeout=600,
         )
         if status >= 400:
@@ -143,7 +146,11 @@ def _probe_checks(client: engine.Client) -> list:
     missing = needed - set(ns)
 
     return [
-        Check("linux userland", "Ubuntu" in facts.get("os_id", ""), facts.get("os_id", "unknown")),
+        Check(
+            "linux userland",
+            "Ubuntu" in facts.get("os_id", ""),
+            facts.get("os_id", "unknown"),
+        ),
         Check(
             "namespaces",
             not missing,
@@ -173,7 +180,7 @@ def _probe_checks(client: engine.Client) -> list:
     ]
 
 
-def doctor(verbose: bool = False) -> int:
+def run(verbose: bool = False) -> int:
     """Run the full environment check. Returns a process exit code."""
     print("MiniSandbox environment check\n")
 
@@ -205,5 +212,5 @@ def doctor(verbose: bool = False) -> int:
     print("Environment ready: macOS controls a Linux VM whose kernel provides")
     print("namespaces, cgroup v2 and seccomp to containers.")
     print("Note: cgroup fs inside a container is read-only, so resource limits")
-    print("must be set at container creation - that arrives in Stage 6.")
+    print("must be set at container creation, not from inside.")
     return 0
