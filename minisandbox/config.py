@@ -12,4 +12,16 @@ DOCKERFILE_DIR = PROJECT_ROOT / "docker"
 
 SANDBOX_USER = "sandbox"
 SANDBOX_UID = 1000
+
+# Image working directory (created read-only once the rootfs is read-only).
 SANDBOX_WORKDIR = "/sandbox"
+
+# Program is delivered through a read-only bind mount so untrusted code cannot
+# modify itself.
+SANDBOX_PROGRAM_DIR = "/sandbox/program"
+
+# Writable scratch lives on tmpfs: memory-backed, noexec, and gone with the
+# container.
+SANDBOX_SCRATCH = "/sandbox/work"
+SANDBOX_TMP = "/tmp"
+SCRATCH_SIZE = "16m"

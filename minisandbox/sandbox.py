@@ -5,19 +5,25 @@ is a field in the JSON we send to the Engine; the Engine turns it into kernel
 syscalls inside the Linux VM. Nothing in this file can isolate a process on its
 own - it can only request isolation and check that it was granted.
 
-Stage 3 implements the lifecycle with the Stage 2 image baseline (unprivileged
-user, no package manager). Filesystem, network, process and resource
-restrictions are added in Stages 4-6 by extending `_configure`.
+Stage 4 adds filesystem isolation:
+  - the container root filesystem is read-only, so image files cannot be altered
+  - the program is delivered through a read-only bind mount of ephemeral,
+    controller-owned scratch, never a host user directory
+  - writable state is tmpfs only (memory-backed, noexec, discarded with the
+    container), so nothing a program writes can persist
+  - no path from inside the container reaches the Docker socket or the host
 """
 
 from __future__ import annotations
 
 import io
 import json
+import shutil
 import tarfile
+import tempfile
 import time
-import urllib.parse
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from . import config, engine
 
@@ -44,23 +50,24 @@ class Sandbox:
     client: engine.Client = field(default_factory=engine.Client)
     image: str = config.SANDBOX_IMAGE
     container_id: str | None = None
+    host_program_dir: str | None = None
 
     # --- Responsibility 1: create -------------------------------------
     def create(self, code: str) -> str:
-        """Ask the Engine for a container and inject the program into it.
+        """Ask the Engine for a container and deliver the program to it.
 
-        The program is written with the archive endpoint rather than passed on
-        the command line: argv has length limits and would appear in `docker
-        ps`, whereas a file keeps the program as data.
+        The program cannot be injected with the archive endpoint once the root
+        filesystem is read-only (the Engine rejects it), so it is staged in a
+        throwaway controller-owned directory and bind-mounted read-only.
         """
-        payload = self._configure(code)
+        self._stage_program(code)
+        payload = self._configure()
         response = self.client.json("POST", "/containers/create", payload)
         self.container_id = response["Id"]
-        self._put_code(code)
         return self.container_id
 
     # --- Responsibility 2: configure ----------------------------------
-    def _configure(self, code: str) -> dict:
+    def _configure(self) -> dict:
         """Build the create request.
 
         This is the only place security posture is expressed. Each later stage
@@ -68,44 +75,48 @@ class Sandbox:
         """
         return {
             "Image": self.image,
-            "Cmd": ["/sandbox/main.py"],
-            "WorkingDir": config.SANDBOX_WORKDIR,
+            "Cmd": [self._program_path()],
+            "WorkingDir": config.SANDBOX_SCRATCH,
             "AttachStdout": True,
             "AttachStderr": True,
             # A non-TTY container keeps stdout and stderr separately framed,
             # which is what lets us report them apart.
             "Tty": False,
             "HostConfig": {
-                # Baseline only. Stages 4-6 add network, filesystem,
-                # capability and resource restrictions here.
                 "AutoRemove": False,
+                # --- Stage 4: filesystem isolation ---
+                # The image filesystem becomes immutable. A program may read it
+                # but cannot modify the interpreter, add binaries, or tamper
+                # with anything that outlives the run.
+                "ReadonlyRootfs": True,
+                # The only writable locations are memory-backed tmpfs mounts.
+                # noexec stops a written file from becoming a program; nosuid
+                # stops privilege bits from mattering; size bounds memory use.
+                "Tmpfs": {
+                    config.SANDBOX_SCRATCH: "rw,noexec,nosuid,nodev,size=%s,mode=1777"
+                    % config.SCRATCH_SIZE,
+                    config.SANDBOX_TMP: "rw,noexec,nosuid,nodev,size=%s,mode=1777"
+                    % config.SCRATCH_SIZE,
+                },
+                # The program arrives read-only from controller scratch. Not
+                # `$HOME`, not Documents: a temporary directory that is deleted
+                # along with the container.
+                "Binds": [
+                    "%s:%s:ro" % (self.host_program_dir, config.SANDBOX_PROGRAM_DIR)
+                ],
+                # Never `-v /var/run/docker.sock`: mounting it would hand the
+                # program control of the daemon and therefore of the host.
             },
         }
 
-    def _put_code(self, code: str) -> None:
-        buffer = io.BytesIO()
-        with tarfile.open(fileobj=buffer, mode="w") as archive:
-            data = code.encode("utf-8")
-            info = tarfile.TarInfo("main.py")
-            info.size = len(data)
-            info.mode = 0o644
-            info.uid = config.SANDBOX_UID
-            info.gid = config.SANDBOX_UID
-            archive.addfile(info, io.BytesIO(data))
-        buffer.seek(0)
+    def _stage_program(self, code: str) -> None:
+        """Write the program to a throwaway directory owned by the controller."""
+        self.host_program_dir = tempfile.mkdtemp(prefix="minisandbox-")
+        path = Path(self.host_program_dir) / "main.py"
+        path.write_text(code, encoding="utf-8")
 
-        path = "/containers/%s/archive?path=%s" % (
-            self.container_id,
-            urllib.parse.quote(config.SANDBOX_WORKDIR, safe=""),
-        )
-        status, raw = self.client.request(
-            "PUT",
-            path,
-            body=buffer.read(),
-            headers={"Content-Type": "application/x-tar"},
-        )
-        if status >= 400:
-            raise engine.EngineError("code injection failed (%d): %s" % (status, raw[:200]))
+    def _program_path(self) -> str:
+        return "%s/main.py" % config.SANDBOX_PROGRAM_DIR
 
     # --- Responsibility 3: execute ------------------------------------
     def execute(self) -> None:
@@ -136,13 +147,15 @@ class Sandbox:
 
     # --- Responsibility 5: destroy ------------------------------------
     def destroy(self) -> None:
-        """Force-remove the container. Safe to call more than once."""
-        if not self.container_id:
-            return
-        self.client.request(
-            "DELETE", "/containers/%s?force=1&v=1" % self.container_id
-        )
-        self.container_id = None
+        """Force-remove the container and its staged program. Idempotent."""
+        if self.container_id:
+            self.client.request(
+                "DELETE", "/containers/%s?force=1&v=1" % self.container_id
+            )
+            self.container_id = None
+        if self.host_program_dir:
+            shutil.rmtree(self.host_program_dir, ignore_errors=True)
+            self.host_program_dir = None
 
     # --- Convenience: the full lifecycle in one call -------------------
     def run(self, code: str, timeout: float = 60.0) -> Result:

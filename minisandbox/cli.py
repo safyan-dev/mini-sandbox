@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import config, engine, environment, image, sandbox
+from . import config, engine, environment, filesystem, image, sandbox
 
 
 def _print_checks(checks) -> int:
@@ -51,6 +51,16 @@ def _verify(_args) -> int:
         print("\n%d check(s) failed" % failed)
         return 1
     print("\nImage verified.")
+    return 0
+
+
+def _filesystem(_args) -> int:
+    print("Verifying filesystem isolation\n")
+    failed = _print_checks(filesystem.verify())
+    if failed:
+        print("\n%d check(s) failed" % failed)
+        return 1
+    print("\nFilesystem isolation verified.")
     return 0
 
 
@@ -106,6 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("verify", help="re-check an existing sandbox image")
 
+    sub.add_parser(
+        "check-filesystem",
+        help="verify filesystem isolation inside a real sandbox",
+    )
+
     run = sub.add_parser("run", help="execute a Python file in a sandbox")
     run.add_argument("file", help="path to the .py program")
     run.add_argument("--timeout", type=float, default=60.0)
@@ -122,6 +137,8 @@ def main(argv: list | None = None) -> int:
         return _build(args)
     if args.command == "verify":
         return _verify(args)
+    if args.command == "check-filesystem":
+        return _filesystem(args)
     if args.command == "run":
         return _run(args)
 

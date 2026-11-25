@@ -29,8 +29,9 @@ work itself.
 python3 -m minisandbox doctor          # verify the macOS -> Docker Linux VM chain
 python3 -m minisandbox build           # build + verify the sandbox image
 python3 -m minisandbox verify          # re-check an existing sandbox image
+python3 -m minisandbox check-filesystem # verify filesystem isolation in a real sandbox
 python3 -m minisandbox run examples/hello.py
-python3 -m minisandbox run attack.py --timeout 5
+python3 -m minisandbox run examples/attack_filesystem.py --timeout 5
 ```
 
 `doctor` verifies the whole chain: macOS host → Docker Desktop Linux VM →
@@ -66,15 +67,35 @@ process; it asks the Engine for an environment and the Linux kernel enforces it.
 `Sandbox.run()` chains all five, with `destroy()` in a `finally` block so a
 container never outlives its program.
 
+## Filesystem isolation (Stage 4)
+
+The container root filesystem is immutable; the only writable paths are
+memory-backed tmpfs mounts that vanish with the container.
+
+| Setting | Effect |
+|---|---|
+| `ReadonlyRootfs: true` | image files cannot be modified or added to |
+| program bind-mounted `:ro` from controller scratch | code cannot rewrite itself |
+| `Tmpfs` `/sandbox/work`, `/tmp` (`noexec,nosuid,nodev`) | scratch exists but cannot become an exploit |
+| no `$HOME`, no `/Volumes`, no host dirs in `Binds` | host files are unreachable |
+| no `/var/run/docker.sock` mount | the program cannot control the daemon |
+
+Note: a read-only rootfs means the Engine rejects `PUT /archive`, so the program
+is staged in a throwaway `tempfile.mkdtemp()` directory and bind-mounted. That
+directory is deleted in `destroy()`.
+
+`check-filesystem` runs a probe inside the real sandbox and asserts each of the
+properties above.
+
 ## Features (built one stage at a time)
 
 | # | Feature               | Status |
 |---|-----------------------|--------|
 | 1 | Sandbox creation      | done (Stage 3) |
 | 2 | Code execution        | done (Stage 3) |
-| 3 | Filesystem isolation  | partial — image is read-only to uid 1000, but the container root is still writable |
-| 4 | Network isolation     | **not yet** — the sandbox can reach the internet |
-| 5 | Process isolation     | partial — pid namespace, no capabilities, non-root; no `--security-opt` hardening |
+| 3 | Filesystem isolation  | done (Stage 4) |
+| 4 | Network isolation     | **not yet** — the sandbox can still reach the internet |
+| 5 | Process isolation     | partial — pid namespace, unprivileged user; `cap_drop`/`no-new-privileges` in Stage 5 |
 | 6 | Resource limits       | **not yet** — no cgroup limits, a program can exhaust the VM |
 | 7 | Execution timeout     | partial — controller-side wait timeout, container is destroyed |
 | 8 | Sandbox destruction   | done (Stage 3) |
@@ -89,10 +110,12 @@ minisandbox/
   engine.py       Docker Engine API client over the Unix socket
   environment.py  Stage 1 environment verification (`doctor`)
   image.py        Stage 2 image build + verification
-  sandbox.py      Stage 3 lifecycle: create/configure/execute/monitor/destroy
-  config.py       image names and static settings
+  sandbox.py      lifecycle: create/configure/execute/monitor/destroy
+  filesystem.py   Stage 4 filesystem isolation verification
+  config.py       image names, mount paths and static settings
 examples/
-  hello.py        prints identity and kernel info
-  fail.py         writes to both streams and exits non-zero
-  crash.py        raises an unhandled exception
+  hello.py               prints identity and kernel info
+  fail.py                writes to both streams and exits non-zero
+  crash.py               raises an unhandled exception
+  attack_filesystem.py   tries to escape or modify the filesystem
 ```
