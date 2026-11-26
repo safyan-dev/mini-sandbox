@@ -72,7 +72,7 @@ attempt("ptrace(PTRACE_ATTACH, pid=1)", try_ptrace)
 
 # bpf: blocked by default seccomp
 def try_bpf():
-    r = libc.syscall(321, 0, None, 0)  # bpf syscall number on arm64
+    r = libc.syscall(321, 0, None, 0)  # bpf syscall number
     if r < 0:
         raise OSError(ctypes.get_errno(), "bpf failed")
     return r
@@ -87,7 +87,7 @@ print("  pid 1 is:", open("/proc/1/comm").read().strip())
 
 print("\n=== seccomp blocks a privileged clone ===")
 def try_clone_privileged():
-    r = libc.syscall(220, 0x20000, 0, 0, 0, 0)  # clone(CLONE_NEWUSER) on arm64
+    r = libc.syscall(220, 0x20000, 0, 0, 0, 0)  # clone(CLONE_NEWUSER)
     if r < 0:
         raise OSError(ctypes.get_errno(), "clone failed")
     return r

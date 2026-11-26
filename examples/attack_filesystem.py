@@ -21,10 +21,10 @@ attempt("write /usr/bin/python3", lambda: open("/usr/bin/python3", "wb").write(b
 attempt("write /sandbox", lambda: open("/sandbox/evil", "w").write("x"))
 attempt("mkdir /opt/evil", lambda: os.mkdir("/opt/evil"))
 
-# 2. Report whether sensitive host paths exist at all.
+# 2. Report whether sensitive host paths exist at all. These are Mac-only
+#    locations: none of them can exist inside the container's filesystem tree.
 host_paths = [
     "/Users",
-    "/Users/safyanyaqoob",
     "/Volumes",
     "/private/etc/hosts",
     "/var/run/docker.sock",
