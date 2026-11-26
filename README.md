@@ -8,18 +8,13 @@ computer untouched.
 
 ---
 
-## What is a sandbox?
-
-A sandbox is a **lie told to a program**. It gets a whole computer that feels
-normal, while every wall it thinks is real is a boundary the kernel won't let it
-cross.
-
 The key idea: you don't *block* a program from reading your files. You give it a
-world where **those files were never created**. Subtraction, not policing.
+world where **those files were never created**.
 
-Your Mac can't do this alone — macOS has no Linux security boundaries. So Docker
-Desktop runs a small Linux VM, and that VM's kernel is where every restriction
-actually lives.
+I use Docker Desktop that runs a small Linux VM, and that VM's kernel is where every restriction
+actually lives, for experimentation.
+
+## Actual Flow
 
 ```
    Python controller        decides what to restrict   (writes JSON)
@@ -36,12 +31,10 @@ asks, and checks that it was granted.
 
 ---
 
-## What's inside the fence
-
-Seven independent promises. Each one answers a different question.
+## What's inside it
 
 | Question | Answer | How |
-|---|---|---|
+|---|---|---| 
 | Who does it think it is? | a nobody user | `uid 1000`, never root |
 | What can it see or change? | almost nothing | read-only root, RAM-only scratch |
 | Can it talk to anyone? | no | own network namespace, no interface |
@@ -92,21 +85,13 @@ could reach the host was stopped.
 
 ## How it was tested
 
-Not *"does it work"* — **"does it hold."** A test that says *"I turned on the
-read-only filesystem"* proves nothing. A test that **tries to write** and reads
-the refusal proves everything.
-
-Three questions, asked of every feature:
-
-1. **Does it run?** A normal program exits cleanly.
-2. **Does it report?** A crash gives exit 1 and a real traceback.
-3. **Does it resist?** Every attack comes back `blocked`.
-
 Two testing habits did most of the work:
 
 - **Attack it.** A fork bomb, a 200MB allocation, `setuid(0)`, a `mount` call.
   If it isn't blocked, the fence isn't there.
-- **Remove a control and watch a number change.** This is the honest test:
+- **Remove a control and watch a number change.**
+
+-Results:
 
 | Config | Capabilities | NoNewPrivs | Seccomp | `unshare` |
 |---|---|---|---|---|
@@ -119,26 +104,7 @@ which single setting would undo your sandbox.
 
 ---
 
-## Three things worth remembering
-
-**A limit with a loophole isn't a limit.**
-The memory ceiling was 64MB, but Docker allowed 2× that in swap — so a program
-could spill to disk and ignore it. Fixed by setting swap equal to memory. The
-same bug exists in every rate limiter that forgets retries.
-
-**A configured limit is not a proven limit.**
-At 1 CPU on a 10-CPU machine, a busy loop never touches the ceiling. The test
-passed while proving nothing. Shrinking the quota to 0.1 core finally showed
-10% throughput. An alarm that never fires is not a working alarm.
-
-**You can't stop a program leaving. You make leaving meaningless.**
-There is no "forbid" switch. Instead the path doesn't exist, the permission bit
-is gone, and the syscall is filtered — three independent reasons the same escape
-fails.
-
----
-
-## Project layout
+## Project Structure
 
 ```
 cli.py            entry point: doctor | build | verify | run | check
@@ -154,14 +120,13 @@ environment/      the Linux image
 tests/            security and execution tests
 examples/         demo programs and attack programs
 ```
-
 ---
 
-## Limits & non-goals
+## Limits
 
 One image, one sandbox, one program at a time. No GUI, no multi-user, no cloud,
-no Kubernetes, no multi-language support. This exists to understand sandboxing —
-not to replace one.
+no Kubernetes, no multi-language support. 
+This is a practical example to understand sandboxing.
 
 ## Requirements
 
